@@ -1,0 +1,10 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+.vs/
+
+# Local per-machine settings (contain secrets such as the ApiKey)
+appsettings.Development.json
+
+# Local MCP launcher config (machine-specific paths + secrets)
+.mcp.json

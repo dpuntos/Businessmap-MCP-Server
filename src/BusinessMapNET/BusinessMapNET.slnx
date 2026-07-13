@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="BusinessMapNET.Core.Tests/BusinessMapNET.Core.Tests.csproj" />
+  <Project Path="BusinessMapNET.Core/BusinessMapNET.Core.csproj" />
+  <Project Path="BusinessMapNET.MCPServer/BusinessMapNET.MCPServer.csproj" Id="29c884c6-32e4-4b86-a596-80e5e6f9f04d" />
+</Solution>
