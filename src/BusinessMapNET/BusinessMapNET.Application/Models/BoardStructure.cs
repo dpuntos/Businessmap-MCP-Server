@@ -1,8 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
-using BusinessMapNET.MCPServer.Dtos;
 
-namespace BusinessMapNET.MCPServer.Services;
+namespace BusinessMapNET.Application.Models;
 
 /// <summary>
 /// Parses the raw <c>currentStructure</c> JSON of a board (as returned by
@@ -15,17 +14,17 @@ namespace BusinessMapNET.MCPServer.Services;
 /// </remarks>
 public sealed class BoardStructure
 {
-    private readonly Dictionary<int, ColumnInfo> _columnsById;
-    private readonly Dictionary<int, LaneInfo> _lanesById;
-    private readonly Dictionary<int, CardTypeInfo> _typesById;
+    private readonly Dictionary<int, ColumnDefinition> _columnsById;
+    private readonly Dictionary<int, LaneDefinition> _lanesById;
+    private readonly Dictionary<int, CardTypeDefinition> _typesById;
 
     private BoardStructure(
         int boardId,
         string? boardName,
-        IReadOnlyList<WorkflowSummary> workflows,
-        IReadOnlyList<ColumnInfo> columns,
-        IReadOnlyList<LaneInfo> lanes,
-        IReadOnlyList<CardTypeInfo> cardTypes)
+        IReadOnlyList<WorkflowDefinition> workflows,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyList<LaneDefinition> lanes,
+        IReadOnlyList<CardTypeDefinition> cardTypes)
     {
         BoardId = boardId;
         BoardName = boardName;
@@ -46,16 +45,16 @@ public sealed class BoardStructure
     public string? BoardName { get; }
 
     /// <summary>The workflows defined on the board.</summary>
-    public IReadOnlyList<WorkflowSummary> Workflows { get; }
+    public IReadOnlyList<WorkflowDefinition> Workflows { get; }
 
     /// <summary>The columns defined on the board.</summary>
-    public IReadOnlyList<ColumnInfo> Columns { get; }
+    public IReadOnlyList<ColumnDefinition> Columns { get; }
 
     /// <summary>The lanes defined on the board.</summary>
-    public IReadOnlyList<LaneInfo> Lanes { get; }
+    public IReadOnlyList<LaneDefinition> Lanes { get; }
 
     /// <summary>The card types available on the board.</summary>
-    public IReadOnlyList<CardTypeInfo> CardTypes { get; }
+    public IReadOnlyList<CardTypeDefinition> CardTypes { get; }
 
     /// <summary>Gets the display name of a column by id, or <see langword="null"/> when unknown.</summary>
     public string? GetColumnName(int? columnId) =>
@@ -78,26 +77,22 @@ public sealed class BoardStructure
     /// Finds columns whose name matches <paramref name="name"/> (case-insensitive).
     /// Returns all matches so callers can detect ambiguity.
     /// </summary>
-    public IReadOnlyList<ColumnInfo> FindColumnsByName(string name) =>
+    public IReadOnlyList<ColumnDefinition> FindColumnsByName(string name) =>
         Columns.Where(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)).ToList();
 
     /// <summary>
     /// Finds lanes whose name matches <paramref name="name"/> (case-insensitive).
     /// Returns all matches so callers can detect ambiguity.
     /// </summary>
-    public IReadOnlyList<LaneInfo> FindLanesByName(string name) =>
+    public IReadOnlyList<LaneDefinition> FindLanesByName(string name) =>
         Lanes.Where(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase)).ToList();
 
     /// <summary>
     /// Finds card types whose name matches <paramref name="name"/> (case-insensitive).
     /// Returns all matches so callers can detect ambiguity.
     /// </summary>
-    public IReadOnlyList<CardTypeInfo> FindCardTypesByName(string name) =>
+    public IReadOnlyList<CardTypeDefinition> FindCardTypesByName(string name) =>
         CardTypes.Where(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase)).ToList();
-
-    /// <summary>Projects this structure into a serializable <see cref="WorkflowInfo"/> DTO.</summary>
-    public WorkflowInfo ToWorkflowInfo() =>
-        new(BoardId, BoardName, Workflows, Columns, Lanes, CardTypes);
 
     /// <summary>
     /// Parses a board <c>currentStructure</c> payload.
@@ -162,7 +157,7 @@ public sealed class BoardStructure
         return results;
     }
 
-    private static WorkflowSummary? ParseWorkflow(string? key, JsonElement element)
+    private static WorkflowDefinition? ParseWorkflow(string? key, JsonElement element)
     {
         var id = ReadId(key, element, "workflow_id");
         if (id is null)
@@ -170,14 +165,14 @@ public sealed class BoardStructure
             return null;
         }
 
-        return new WorkflowSummary(
+        return new WorkflowDefinition(
             id.Value,
             ReadString(element, "name"),
             ReadInt(element, "type"),
             ReadInt(element, "position"));
     }
 
-    private static ColumnInfo? ParseColumn(string? key, JsonElement element)
+    private static ColumnDefinition? ParseColumn(string? key, JsonElement element)
     {
         var id = ReadId(key, element, "column_id");
         if (id is null)
@@ -185,7 +180,7 @@ public sealed class BoardStructure
             return null;
         }
 
-        return new ColumnInfo(
+        return new ColumnDefinition(
             id.Value,
             ReadString(element, "name"),
             ReadInt(element, "workflow_id"),
@@ -195,7 +190,7 @@ public sealed class BoardStructure
             ReadString(element, "type"));
     }
 
-    private static LaneInfo? ParseLane(string? key, JsonElement element)
+    private static LaneDefinition? ParseLane(string? key, JsonElement element)
     {
         var id = ReadId(key, element, "lane_id");
         if (id is null)
@@ -203,7 +198,7 @@ public sealed class BoardStructure
             return null;
         }
 
-        return new LaneInfo(
+        return new LaneDefinition(
             id.Value,
             ReadString(element, "name"),
             ReadInt(element, "workflow_id"),
@@ -211,7 +206,7 @@ public sealed class BoardStructure
             ReadString(element, "color"));
     }
 
-    private static CardTypeInfo? ParseCardType(string? key, JsonElement element)
+    private static CardTypeDefinition? ParseCardType(string? key, JsonElement element)
     {
         var id = ReadId(key, element, "type_id");
         if (id is null)
@@ -219,7 +214,7 @@ public sealed class BoardStructure
             return null;
         }
 
-        return new CardTypeInfo(
+        return new CardTypeDefinition(
             id.Value,
             ReadString(element, "name"),
             ReadString(element, "color"));

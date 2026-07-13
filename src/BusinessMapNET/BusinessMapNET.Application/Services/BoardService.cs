@@ -1,61 +1,37 @@
-using System.ComponentModel;
+using BusinessMapNET.Application.Internal;
+using BusinessMapNET.Application.Models;
 using BusinessMapNET.Core.Models;
-using BusinessMapNET.MCPServer.Dtos;
-using BusinessMapNET.MCPServer.Services;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
-namespace BusinessMapNET.MCPServer.Tools;
+namespace BusinessMapNET.Application.Services;
 
-/// <summary>
-/// High-level MCP tools to discover boards and get an operational overview of a board.
-/// </summary>
-[McpServerToolType]
-public sealed class BoardTools
+/// <inheritdoc />
+public sealed class BoardService : IBoardService
 {
     private const int MaxScanCards = 1000;
     private const int FetchSize = 100;
     private const int MaxOwnersReturned = 25;
 
-    private readonly BusinessMapToolContext _context;
-    private readonly ILogger<BoardTools> _logger;
+    private readonly BusinessMapContext _context;
+    private readonly ILogger<BoardService> _logger;
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="BoardTools"/> class.
-    /// </summary>
-    public BoardTools(BusinessMapToolContext context, ILogger<BoardTools> logger)
+    /// <summary>Initializes a new instance of the <see cref="BoardService"/> class.</summary>
+    public BoardService(BusinessMapContext context, ILogger<BoardService> logger)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    /// <summary>
-    /// Lists the accessible boards with the minimum information needed to choose one.
-    /// </summary>
-    /// <remarks>
-    /// Example: list active boards whose name contains "delivery":
-    /// <code>
-    /// list_boards(nameContains: "delivery", includeArchived: false)
-    /// </code>
-    /// </remarks>
-    [McpServerTool(Name = "list_boards")]
-    [Description(
-        "List the boards the API key can access, including board id, name, description and the owning workspace. " +
-        "Use this first to discover which board to work on, then pass the chosen board id/name to other tools. " +
-        "Supports an optional name filter and a limit.")]
-    public async Task<IReadOnlyList<BoardSummary>> ListBoardsAsync(
-        [Description("Optional case-insensitive substring to filter boards by name.")]
-        string? nameContains = null,
-        [Description("Whether to include archived boards. Defaults to false.")]
-        bool includeArchived = false,
-        [Description("Maximum number of boards to return (1-200). Defaults to 100.")]
-        int limit = 100,
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<Board>> ListBoardsAsync(
+        string? nameContains,
+        bool includeArchived,
+        int limit,
         CancellationToken cancellationToken = default)
     {
         limit = Math.Clamp(limit, 1, 200);
 
         var boards = await _context.GetBoardsAsync(cancellationToken).ConfigureAwait(false);
-        var workspaceNames = await TryGetWorkspaceNamesAsync(cancellationToken).ConfigureAwait(false);
 
         IEnumerable<Board> filtered = boards;
 
@@ -73,38 +49,35 @@ public sealed class BoardTools
         var result = filtered
             .OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase)
             .Take(limit)
-            .Select(b => new BoardSummary(
-                b.BoardId,
-                b.Name,
-                b.Description,
-                b.WorkspaceId,
-                workspaceNames?.GetValueOrDefault(b.WorkspaceId),
-                b.Type,
-                b.IsArchived == 1))
             .ToList();
 
         _logger.LogInformation("list_boards returned {Count} board(s).", result.Count);
         return result;
     }
 
-    /// <summary>
-    /// Produces an operational summary of a board: totals, blocked/overdue/unassigned counts,
-    /// per-column counts and per-owner counts.
-    /// </summary>
-    /// <remarks>
-    /// Example: <c>get_board_status(boardName: "Delivery")</c>.
-    /// </remarks>
-    [McpServerTool(Name = "get_board_status")]
-    [Description(
-        "Get an operational snapshot of a board (by id or name): total active cards, number blocked, number overdue " +
-        "(deadline in the past and not in a done column), number unassigned, card counts per column and card counts " +
-        "per owner. Use this to answer questions like 'how is the board doing' or 'who is overloaded'. Analysis is " +
-        "capped for very large boards and will indicate when results were truncated.")]
-    public async Task<BoardStatusResult> GetBoardStatusAsync(
-        [Description("The board id. Provide this or 'boardName'.")]
-        int? boardId = null,
-        [Description("The board name (case-insensitive). Provide this or 'boardId'.")]
-        string? boardName = null,
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<int, string?>?> TryGetWorkspaceNamesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var workspaces = await _context.ExecuteAsync(
+                () => _context.Client.Workspaces.GetWorkspacesAsync(cancellationToken),
+                "list workspaces").ConfigureAwait(false);
+
+            return workspaces.ToDictionary(w => w.WorkspaceId, w => w.Name);
+        }
+        catch (BusinessMapServiceException ex)
+        {
+            _logger.LogWarning(ex, "Could not resolve workspace names; board list will omit them.");
+            return null;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<BoardStatusReport> GetBoardStatusAsync(
+        int? boardId,
+        string? boardName,
         CancellationToken cancellationToken = default)
     {
         var board = await _context.ResolveBoardAsync(boardId, boardName, cancellationToken).ConfigureAwait(false);
@@ -210,7 +183,7 @@ public sealed class BoardTools
             blocked,
             overdue);
 
-        return new BoardStatusResult(
+        return new BoardStatusReport(
             board.BoardId,
             board.Name,
             total,
@@ -230,24 +203,7 @@ public sealed class BoardTools
             return false;
         }
 
-        var deadline = BusinessMapToolContext.ParseDate(card.Deadline);
+        var deadline = DateParsing.Parse(card.Deadline);
         return deadline is not null && deadline < now;
-    }
-
-    private async Task<Dictionary<int, string?>?> TryGetWorkspaceNamesAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            var workspaces = await _context.ExecuteAsync(
-                () => _context.Client.Workspaces.GetWorkspacesAsync(cancellationToken),
-                "list workspaces").ConfigureAwait(false);
-
-            return workspaces.ToDictionary(w => w.WorkspaceId, w => w.Name);
-        }
-        catch (ToolException ex)
-        {
-            _logger.LogWarning(ex, "Could not resolve workspace names; board list will omit them.");
-            return null;
-        }
     }
 }

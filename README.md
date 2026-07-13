@@ -23,13 +23,18 @@ It solves two problems:
    move, assign and comment on cards** by intent — the server translates board/user/column names
    into the ids the API needs and returns clear messages.
 
+Between the two, a **business layer** (`BusinessMapNET.Application`) encapsulates all the domain
+logic (name resolution, validation, caching, error translation). `BusinessMapNET.Core` stays a
+**pure REST wrapper** and the MCP tools stay **thin adapters**, so the same business services
+could be reused from another host (a web API, a CLI, …) without pulling in the MCP protocol.
+
 In practice, instead of learning the API or navigating the UI, you just ask:
 *"Which urgent cards are blocked on the Support board and who owns them?"* and the agent uses the
 MCP tools to answer and act.
 
 | | |
 |---|---|
-| 🧩 **What it is** | .NET 10 SDK + MCP server (stdio) |
+| 🧩 **What it is** | .NET 10 SDK + business layer + MCP server (stdio) |
 | 🤖 **Who it's for** | AI agents and .NET apps integrating Businessmap/Kanbanize |
 | 🛠️ **What it offers** | 13 MCP tools · 22 typed endpoints · resolution by name |
 | 🔌 **How it connects** | **stdio** transport (JSON-RPC MCP) |
@@ -131,13 +136,17 @@ in parentheses.
 
 ## 1. Overview
 
-**BusinessMapNET** is a .NET 10 solution organized into three projects. Its dual goal is to:
+**BusinessMapNET** is a .NET 10 solution organized into four projects. Its dual goal is to:
 
 1. Provide a **strongly-typed client** (`BusinessMapNET.Core`) over the Businessmap (Kanbanize)
    REST API v2.
 2. Expose that client as an **MCP server** (`BusinessMapNET.MCPServer`) with high-level tools,
    designed so an agent can work "by intent" (find cards, move, assign…) without knowing internal
    identifiers.
+
+In between, `BusinessMapNET.Application` holds the **business logic** (name resolution, validation,
+per-request caching and error translation) exposed as services. This keeps the Core a pure REST
+wrapper and the MCP tools thin adapters.
 
 | Aspect | Detail |
 |--------|--------|
@@ -158,11 +167,13 @@ in parentheses.
 graph TD
 	subgraph Solution["BusinessMapNET solution"]
 		Core["BusinessMapNET.Core<br/>(library / SDK)"]
+		App["BusinessMapNET.Application<br/>(business services)"]
 		MCP["BusinessMapNET.MCPServer<br/>(MCP server · stdio)"]
 		Tests["BusinessMapNET.Core.Tests<br/>(xUnit · 47 tests)"]
 	end
 
-	MCP -->|"depends on"| Core
+	MCP -->|"depends on"| App
+	App -->|"depends on"| Core
 	Tests -->|"tests"| Core
 
 	Core -->|"HTTP + apikey"| API["Businessmap API v2"]
@@ -171,7 +182,8 @@ graph TD
 | Project | Type | Responsibility |
 |---------|------|----------------|
 | `BusinessMapNET.Core` | Class library | Typed client for API v2: models, endpoints, HTTP infrastructure, configuration and DI registration. |
-| `BusinessMapNET.MCPServer` | Console host | MCP server that registers 13 high-level tools over the Core. |
+| `BusinessMapNET.Application` | Class library | Business services encapsulating the domain logic (name resolution, validation, per-request caching, error translation) over the Core client. |
+| `BusinessMapNET.MCPServer` | Console host | MCP server that registers 13 high-level tools as thin adapters over the Application services. |
 | `BusinessMapNET.Core.Tests` | xUnit test project | Core coverage: HTTP, query strings, serialization, DI and configuration. |
 
 ---
@@ -186,13 +198,20 @@ graph TB
 
 	subgraph MCPServer["BusinessMapNET.MCPServer"]
 		direction TB
-		Tools["Tool classes<br/>CardTools · BoardTools · WorkflowTools<br/>TaskTools · CommentTools · UserTools"]
-		Ctx["BusinessMapToolContext<br/>(scoped · cache · resolution · error mapping)"]
-		Struct["BoardStructure<br/>(currentStructure parsing)"]
+		Tools["Tool classes (thin adapters)<br/>CardTools · BoardTools · WorkflowTools<br/>TaskTools · CommentTools · UserTools"]
+		DtoMap["DtoMapper · ToolExecutor<br/>(model→DTO · error mapping)"]
 		Dtos["DTOs<br/>(serializable records)"]
-		Tools --> Ctx
-		Tools --> Struct
+		Tools --> DtoMap
 		Tools --> Dtos
+	end
+
+	subgraph AppLayer["BusinessMapNET.Application"]
+		direction TB
+		Svcs["Business services<br/>ICardService · IBoardService · IWorkflowService<br/>ITaskService · ICommentService · IUserService"]
+		Ctx["BusinessMapContext<br/>(scoped · cache · resolution · error mapping)"]
+		Struct["BoardStructure<br/>(currentStructure parsing)"]
+		Svcs --> Ctx
+		Svcs --> Struct
 	end
 
 	subgraph CoreLib["BusinessMapNET.Core"]
@@ -209,6 +228,7 @@ graph TB
 	API["Businessmap API v2<br/>REST · apikey header"]
 
 	LLM -->|"stdio (JSON-RPC MCP)"| Tools
+	DtoMap --> Svcs
 	Ctx --> Facade
 	Base -->|"HttpClient"| API
 ```
@@ -216,11 +236,14 @@ graph TB
 **Flow of an agent request**
 
 1. The MCP host invokes a *tool* (e.g. `find_cards`) over **stdio**.
-2. The *tool* uses `BusinessMapToolContext` to resolve the board/user and build the query.
-3. The context calls `IBusinessMapClient` → the specific resource API (`ICardsApi`).
+2. The *tool* is a thin adapter: it maps the MCP parameters into a service call on the
+   **Application** layer (e.g. `ICardService.FindCardsAsync`).
+3. The service uses `BusinessMapContext` to resolve the board/user, build the query and apply the
+   business rules, calling `IBusinessMapClient` → the specific resource API (`ICardsApi`).
 4. `BusinessMapApiClient` sends the HTTP request with the `apikey` header, unwraps the `data`
    envelope and returns the typed model.
-5. The *tool* maps the Core model to a serializable **DTO** and returns it to the agent.
+5. The *tool* maps the service result to a serializable **DTO** and returns it to the agent, turning
+   any `BusinessMapServiceException` into a `ToolException`.
 
 ---
 
@@ -235,10 +258,11 @@ graph TB
 | **Options** | `BusinessMapSettings` + `IOptions<>` | Strongly-typed, validated configuration. |
 | **Envelope unwrapping** | `ApiResponse<T>` / `PagedResult<T>` | Unwraps the API's standard `data` envelope centrally. |
 | **Builder** | `QueryStringBuilder` | Safe query-string building (omits null/empty, escapes keys/values). |
-| **DTO** | `BusinessMapNET.MCPServer.Dtos` | Immutable serializable records decoupled from the Core models. |
-| **Adapter / Anti-corruption** | `BusinessMapToolContext`, `BoardStructure` | Translates between the API (raw ids) and agent intent (names, clear messages). |
-| **Error translation** | `BusinessMapApiException` → `ToolException` | Turns HTTP errors into agent-actionable messages. |
-| **Per-request caching** | `BusinessMapToolContext` (scoped) | Caches boards, users and structures within the same request. |
+| **DTO** | `BusinessMapNET.MCPServer.Dtos` | Immutable serializable records decoupled from the Core/Application models. |
+| **Service / Application layer** | `BusinessMapNET.Application.Services` (`ICardService`, `IBoardService`, …) | Encapsulates the business logic so the Core stays a pure REST wrapper and the MCP tools stay thin. |
+| **Adapter / Anti-corruption** | `BusinessMapContext`, `BoardStructure`, `DtoMapper` | Translates between the API (raw ids) and agent intent (names, clear messages) and between domain models and DTOs. |
+| **Error translation** | `BusinessMapApiException` → `BusinessMapServiceException` → `ToolException` | The Application turns HTTP errors into domain errors; the MCP `ToolExecutor` turns those into agent-actionable messages. |
+| **Per-request caching** | `BusinessMapContext` (scoped) | Caches boards, users and structures within the same request. |
 
 **Cross-cutting conventions**
 
@@ -424,8 +448,9 @@ services.AddBusinessMap(opts => { /* in code */ });
 
 ## 6. `BusinessMapNET.MCPServer` — functional detail
 
-The server bootstraps a **generic Host**, registers `BusinessMapToolContext` (scoped) and mounts
-the MCP server with **stdio** transport and the 6 tool classes.
+The server bootstraps a **generic Host**, registers the Core client (`AddBusinessMap`) and the
+business services (`AddBusinessMapApplication`, which also registers the scoped
+`BusinessMapContext`), and mounts the MCP server with **stdio** transport and the 6 tool classes.
 
 ### 6.1 Tool catalog (13)
 
@@ -470,17 +495,26 @@ the MCP server with **stdio** transport and the 6 tool classes.
 `find_cards`, `get_card_details`) and 7 write tools (`create_card`, `update_card`, `move_card`,
 `assign_card`, `add_comment`, `create_task`, `complete_task`).
 
-### 6.2 `BusinessMapToolContext` (shared helper)
+### 6.2 Business services (`BusinessMapNET.Application`) and the shared context
 
-A **scoped** service that centralizes the cross-cutting concerns of the tools:
+The MCP tools are **thin adapters**: each tool maps its parameters into a call on a business
+service (`ICardService`, `IBoardService`, `IWorkflowService`, `ITaskService`, `ICommentService`,
+`IUserService`) and maps the result back into a DTO via `DtoMapper`. All the logic lives in the
+**Application** layer.
+
+`BusinessMapContext` is a **scoped** service (in the Application project) that centralizes the
+cross-cutting concerns of those services:
 
 - **Resolution** of a board by id or name (with ambiguity detection and suggestions).
 - **Per-request cache** of boards, users, current user and board structures.
 - **Parsing** of `currentStructure` into `BoardStructure` (lookups by id/name for columns, lanes,
   types).
-- **Mapping** of Core models to DTOs (`ToSummary`, `ToInfo`, `ReadCustomFields`).
-- **Error translation**: `BusinessMapApiException` → `ToolException` with a message based on the
-  status (401/403, 404, 422, 429, 5xx…).
+- **Error translation**: `BusinessMapApiException` → `BusinessMapServiceException` with a message
+  based on the status (401/403, 404, 422, 429, 5xx…).
+
+On the MCP side, `DtoMapper` maps Core/Application models to DTOs (`ToSummary`, `ToInfo`,
+`ReadCustomFields`, …) and `ToolExecutor` translates any `BusinessMapServiceException` into a
+`ToolException` so the business layer never depends on the MCP protocol.
 
 ### 6.3 Example sequence — `find_cards`
 
@@ -488,25 +522,28 @@ A **scoped** service that centralizes the cross-cutting concerns of the tools:
 sequenceDiagram
 	participant Host as MCP host
 	participant Tool as CardTools.find_cards
-	participant Ctx as BusinessMapToolContext
+	participant Svc as ICardService
+	participant Ctx as BusinessMapContext
 	participant Api as ICardsApi
 	participant BM as Businessmap API v2
 
 	Host->>Tool: find_cards(boardName, assignedToMe, ...)
-	Tool->>Ctx: ResolveBoardAsync(boardName)
+	Tool->>Svc: FindCardsAsync(criteria)
+	Svc->>Ctx: ResolveBoardAsync(boardName)
 	Ctx->>Api: (cache boards) GetBoardsAsync()
 	Api->>BM: GET /boards
 	BM-->>Api: { data: [...] }
 	Api-->>Ctx: IReadOnlyList~Board~
-	Ctx-->>Tool: Resolved board
-	Tool->>Ctx: GetCurrentUserIdAsync() (if assignedToMe)
+	Ctx-->>Svc: Resolved board
+	Svc->>Ctx: GetCurrentUserIdAsync() (if assignedToMe)
 	Ctx->>Api: GetCurrentUserAsync()
 	Api->>BM: GET /me
 	BM-->>Api: { data: {...} }
-	Tool->>Api: GetCardsAsync(query)
+	Svc->>Api: GetCardsAsync(query)
 	Api->>BM: GET /cards?board_ids=..&owner_user_ids=..
 	BM-->>Api: { data: { pagination, data: [...] } }
-	Api-->>Tool: PagedResult~Card~
+	Api-->>Svc: PagedResult~Card~
+	Svc-->>Tool: CardSearchResult
 	Tool-->>Host: FindCardsResult (DTOs)
 ```
 

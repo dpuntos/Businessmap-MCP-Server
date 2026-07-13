@@ -48,7 +48,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BusinessMapNET.Core\BusinessMapNET.Core.csproj" />
+    <ProjectReference Include="..\BusinessMapNET.Application\BusinessMapNET.Application.csproj" />
   </ItemGroup>
 
 </Project>
