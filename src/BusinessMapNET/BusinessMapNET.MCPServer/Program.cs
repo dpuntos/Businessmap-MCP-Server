@@ -32,6 +32,8 @@ builder.Services.AddBusinessMapApplication();
 builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()
+    .WithTools<BoardTools>()
+    .WithTools<CardTools>()
     .WithTools<WorkflowTools>()
     .WithTools<TaskTools>()
     .WithTools<CommentTools>()
