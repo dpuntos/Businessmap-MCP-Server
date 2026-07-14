@@ -12,7 +12,12 @@
         "type": "stdio"
       },
       "packageArguments": [],
-      "environmentVariables": []
+      "environmentVariables": [
+        {
+          "name": "DOTNET_ENVIRONMENT",
+          "value": "Development"
+        }
+      ]
     }
   ],
   "repository": {

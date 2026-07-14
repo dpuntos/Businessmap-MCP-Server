@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "BusinessMapNET.MCPServer": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
